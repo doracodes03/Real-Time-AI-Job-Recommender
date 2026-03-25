@@ -1,0 +1,10 @@
+nltk
+pandas
+scikit-learn
+spacy
+google-genai
+python-dotenv
+pydantic
+joblib
+scipy
+sentence-transformers
