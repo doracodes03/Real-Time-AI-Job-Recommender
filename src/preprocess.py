@@ -15,9 +15,30 @@ ROLES_DICT = [
 from src.vectorize import get_bert_embeddings
 import numpy as np
 
+import re
+
+import re
+
 def preprocess_text(text):
     text = str(text).lower()
-    text = re.sub(r'[^a-zA-Z0-9]', ' ', text)
+
+    # preserve important symbols
+    text = re.sub(r'[^a-zA-Z0-9+#.\s]', ' ', text)
+
+    # normalize phrases
+    text = text.replace("c plus plus", "c++")
+    text = text.replace("c hash", "c#")
+    text = text.replace("node js", "node.js")
+    text = text.replace("asp.net", "asp net")
+
+    # controlled abbreviation expansion
+    text = re.sub(r'\baiml\b', 'artificial intelligence machine learning', text)
+    text = re.sub(r'\bnlp\b', 'natural language processing', text)
+
+    # optional (keep/remove depending on performance)
+    # text = re.sub(r'\bml\b', 'machine learning', text)
+    # text = re.sub(r'\bai\b', 'artificial intelligence', text)
+
     return text.strip()
 
 
@@ -80,14 +101,18 @@ def extract_entities(text, dynamic_skills=None, semantic_expand=False, threshold
     }
 
 # Utility for semantic skill overlap (for recommend.py)
-def semantic_skill_overlap(resume_skills, job_skills, threshold=0.75):
+def semantic_skill_overlap(resume_skills, job_skills, threshold=0.75, resume_embs=None):
     """
     Compute semantic overlap between two skill lists using embeddings.
     Returns a score between 0 and 1.
     """
     if not resume_skills or not job_skills:
         return 0.0
-    resume_embs = get_bert_embeddings(resume_skills)
+    
+    # Use pre-computed resume embeddings if provided
+    if resume_embs is None:
+        resume_embs = get_bert_embeddings(resume_skills)
+        
     job_embs = get_bert_embeddings(job_skills)
     sim_matrix = np.dot(resume_embs, np.array(job_embs).T) / (
         np.linalg.norm(resume_embs, axis=1, keepdims=True) * np.linalg.norm(job_embs, axis=1)

@@ -31,7 +31,8 @@ function App() {
       formData.append('resume_text', resumeText);
 
       if (type === 'content') {
-        response = await axios.post(`${API_BASE}/recommend/content`, formData);
+        // ⚡ Use fast endpoint for instant results
+        response = await axios.post(`${API_BASE}/recommend/fast`, formData);
       } else if (type === 'cf') {
         response = await axios.get(`${API_BASE}/recommend/collaborative/${userId}`);
       } else if (type === 'hybrid') {

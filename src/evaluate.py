@@ -60,8 +60,8 @@ def old_recommender(resume_text, jobs_df, tfidf, job_vectors):
     result_df = recommend_jobs(
         resume_data, jobs_df, tfidf, job_vectors, bert_job_vectors=None, top_n=5, skill_threshold=1.0
     )
-    # Return top roles
-    return result_df["Role"].str.lower().tolist()
+    # Return top job titles (use 'Job Title' instead of 'Role')
+    return result_df["Job Title"].str.lower().tolist()
 
 def new_recommender(resume_text, jobs_df, tfidf, job_vectors, bert_job_vectors):
     """
@@ -71,7 +71,7 @@ def new_recommender(resume_text, jobs_df, tfidf, job_vectors, bert_job_vectors):
     result_df = recommend_jobs(
         resume_data, jobs_df, tfidf, job_vectors, bert_job_vectors=bert_job_vectors, top_n=5
     )
-    return result_df["Role"].str.lower().tolist()
+    return result_df["Job Title"].str.lower().tolist()
 
 # 4. Evaluation Functions
 
@@ -119,31 +119,45 @@ def compare_models(old_model_fn, new_model_fn, test_cases, jobs_df, tfidf, job_v
 
 def run_evaluation(jobs_df=None):
     """
-    If jobs_df is None, loads data/jobs_test.csv by default.
-    Trains vectorizers/embeddings on data/jobs_train.csv.
-    Evaluates on jobs_df (test set).
+    Load precomputed artifacts (training already done).
+    Evaluates recommender on test cases using saved vectorizers/embeddings.
     """
     import os
-    if jobs_df is None:
-        jobs_df = pd.read_csv('data/jobs_test.csv')
-    # Always train vectorizers/embeddings on jobs_train.csv
-    train_path = 'data/jobs_train.csv'
-    if not os.path.exists(train_path):
-        raise FileNotFoundError(f"{train_path} not found. Run split_job_descriptions.py first.")
-    train_jobs = pd.read_csv(train_path)
-    train_corpus = train_jobs["Job Description"].tolist()
-    tfidf, job_vectors = get_tfidf_entities(train_corpus)
-    bert_job_vectors = get_bert_embeddings(train_corpus)
+    import joblib
+    
+    # Load precomputed artifacts
+    ARTIFACTS_DIR = 'artifacts'
+    tfidf_path = os.path.join(ARTIFACTS_DIR, 'tfidf.pkl')
+    vectors_path = os.path.join(ARTIFACTS_DIR, 'job_vectors.pkl')
+    bert_vectors_path = os.path.join(ARTIFACTS_DIR, 'bert_job_vectors.pkl')
+    jobs_path = os.path.join(ARTIFACTS_DIR, 'jobs.pkl')
+    
+    if not os.path.exists(tfidf_path):
+        raise FileNotFoundError(f"Artifacts not found. Run train.py first. Missing: {tfidf_path}")
+    
+    print("Loading precomputed artifacts...")
+    tfidf = joblib.load(tfidf_path)
+    job_vectors = joblib.load(vectors_path)
+    
+    # Handle both single bert_job_vectors.pkl and chunked bert_chunk_*.npy files
+    if os.path.exists(bert_vectors_path):
+        bert_job_vectors = joblib.load(bert_vectors_path)
+    else:
+        import glob
+        bert_chunks = sorted(glob.glob(os.path.join(ARTIFACTS_DIR, 'bert_chunk_*.npy')))
+        if bert_chunks:
+            print(f"Loading {len(bert_chunks)} BERT chunk files...")
+            import numpy as np
+            bert_job_vectors = np.vstack([np.load(f) for f in bert_chunks])
+        else:
+            raise FileNotFoundError(f"No BERT vectors found in artifacts")
+    
+    jobs_df = pd.read_pickle(jobs_path)
+    print(f"Loaded {len(jobs_df)} jobs from artifacts")
 
-    # For evaluation, use test set jobs
-    test_corpus = jobs_df["Job Description"].tolist()
-    # Re-vectorize test jobs using train vectorizer
-    job_vectors_test = tfidf.transform(test_corpus)
-    bert_job_vectors_test = get_bert_embeddings(test_corpus)
-
-    # Evaluate both models on test set
+    # Evaluate both models using precomputed vectors
     results_df = compare_models(
-        old_recommender, new_recommender, TEST_CASES, jobs_df, tfidf, job_vectors_test, bert_job_vectors_test
+        old_recommender, new_recommender, TEST_CASES, jobs_df, tfidf, job_vectors, bert_job_vectors
     )
 
     # Output summary
@@ -169,11 +183,6 @@ def run_evaluation(jobs_df=None):
 
     return results_df
 
-
-# Usage:
-# import jobs_df from your jobs.csv (ensure 'Job Description' and 'Role' columns)
-# jobs_df = pd.read_csv('data/jobs.csv')
-# run_evaluation(jobs_df)
 
 if __name__ == "__main__":
     run_evaluation()

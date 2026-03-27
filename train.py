@@ -6,25 +6,31 @@ import os
 import re
 from src.preprocess import preprocess_text
 
-# Configuration
-DATA_PATH = "data/jobs_train.csv"
+# Configuration - Optimized for i5 + limited RAM
+DATA_PATH = "data/jobs.csv"  # Use unified dataset - no train/test split needed
 ARTIFACTS_DIR = "artifacts"
-# Lowered for memory efficiency on low RAM systems
-MAX_TOTAL_JOBS = 200
-SAMPLE_SIZE_FOR_FIT = 200
-CHUNK_SIZE = 200
-MAX_FEATURES = 2000
+# Safe limit for i5 with BERT embeddings (50K-100K jobs)
+MAX_TOTAL_JOBS = 50000
+SAMPLE_SIZE_FOR_FIT = 2000
+CHUNK_SIZE = 256  # Smaller chunks to prevent memory spikes
+MAX_FEATURES = 1000  # Reduced from 2000 to save memory
 
 if not os.path.exists(ARTIFACTS_DIR):
     os.makedirs(ARTIFACTS_DIR)
 
 def get_combined_text(df):
+    """Combine job features with description truncation for memory efficiency."""
+    df = df.copy()  # Avoid SettingWithCopyWarning
+    
     # Handle missing values
     df['Job Title'] = df['Job Title'].fillna('')
     # Try 'skills' or 'Skills'
     skill_col = 'skills' if 'skills' in df.columns else 'Skills'
     df[skill_col] = df[skill_col].fillna('')
     df['Job Description'] = df['Job Description'].fillna('')
+    
+    # ⚡ CRITICAL: Truncate descriptions to 500 chars to reduce memory footprint
+    df['Job Description'] = df['Job Description'].str[:500]
     
     # Combine features
     return (
@@ -40,9 +46,20 @@ if torch.cuda.is_available():
 else:
     print("[INFO] No GPU detected. BERT will use CPU. Training may be slow.")
 
-# Step 1: Fit TF-IDF on a sample to build vocabulary
-print(f"Phase 1: Fitting TF-IDF on a sample of {SAMPLE_SIZE_FOR_FIT} rows...")
-sample_df = pd.read_csv(DATA_PATH, nrows=SAMPLE_SIZE_FOR_FIT)
+# Step 1.5: Load and sample data (no train/test split - this is retrieval, not supervised learning)
+print(f"Phase 1.5: Loading dataset from {DATA_PATH}...")
+all_data = pd.read_csv(DATA_PATH)
+print(f"  Total rows available: {len(all_data)}")
+
+# ⚡ SMART SAMPLING: Use 50K jobs for MVP (prevents crashes)
+if len(all_data) > MAX_TOTAL_JOBS:
+    print(f"  Sampling {MAX_TOTAL_JOBS} jobs (too many for i5 + limited RAM)...")
+    all_data = all_data.sample(n=MAX_TOTAL_JOBS, random_state=42)
+    print(f"  Using sampled dataset: {len(all_data)} jobs")
+
+# Step 2: Fit TF-IDF on a sample to build vocabulary
+print(f"Phase 2: Fitting TF-IDF on a sample of {SAMPLE_SIZE_FOR_FIT} rows...")
+sample_df = all_data.head(SAMPLE_SIZE_FOR_FIT) if len(all_data) > SAMPLE_SIZE_FOR_FIT else all_data
 combined_sample = get_combined_text(sample_df)
 
 tfidf = TfidfVectorizer(
@@ -54,66 +71,87 @@ tfidf.fit(combined_sample)
 joblib.dump(tfidf, os.path.join(ARTIFACTS_DIR, "tfidf.pkl"))
 print("Saved tfidf.pkl")
 
-# Step 2: Transform the full dataset in chunks
-print("Phase 2: Transforming full dataset in chunks...")
+# Step 3: Transform dataset in chunks
+print("Phase 3: Transforming dataset in chunks...")
 all_vectors = []
-metadata_list = []
 
-# Phase 2: Transform the full dataset in chunks
-# (Using 500 for demonstration/environment speed)
-# MAX_TOTAL_JOBS already set above
-
+# ⚡ Process already-sampled data in chunks
 processed_count = 0
-for chunk in pd.read_csv(DATA_PATH, chunksize=CHUNK_SIZE):
-    if processed_count >= MAX_TOTAL_JOBS:
-        break
-        
-    print(f"  Processing chunk: {processed_count} to {processed_count + len(chunk)}...")
+for chunk_num, i in enumerate(range(0, len(all_data), CHUNK_SIZE)):
+    chunk = all_data.iloc[i:i+CHUNK_SIZE].copy()
+    
+    print(f"  TF-IDF chunk {chunk_num}: {i} to {min(i+CHUNK_SIZE, len(all_data))}...")
     
     combined_chunk = get_combined_text(chunk)
     vectors = tfidf.transform(combined_chunk)
     all_vectors.append(vectors)
     
-    # Keep only necessary columns for metadata to save memory
-    cols_to_keep = ['Job Title', 'Company', 'Location', 'skills', 'Job Description', 'Experience']
-    # Check which columns exist
-    available_cols = [c for c in cols_to_keep if c in chunk.columns]
-    
-    # If 'id' doesn't exist, create it
-    if 'id' not in chunk.columns:
-        chunk['id'] = range(processed_count, processed_count + len(chunk))
-        chunk['id'] = chunk['id'].astype(str)
-    
-    if 'id' not in available_cols:
-        available_cols.insert(0, 'id')
-        
-    metadata_list.append(chunk[available_cols])
-    
     processed_count += len(chunk)
 
-# Phase 3: Finalizing Metadata and TF-IDF Vectors
-print("Phase 3: Finalizing Metadata and TF-IDF Vectors...")
-metadata_df = pd.concat(metadata_list, ignore_index=True)
+# Step 4: Stack TF-IDF vectors
+print("Phase 4: Stacking TF-IDF vectors...")
 from scipy.sparse import vstack
 final_tfidf_vectors = vstack(all_vectors)
+print(f"  TF-IDF matrix shape: {final_tfidf_vectors.shape}")
 
-# Phase 4: Generating Semantic Embeddings (Sentence-BERT)
-print("Phase 4: Generating Semantic Embeddings (Sentence-BERT)...")
+# Keep metadata with only essential columns
+print("Phase 5: Preparing metadata...")
+cols_to_keep = ['Job Title', 'Company', 'Location', 'skills', 'Job Description', 'Experience']
+available_cols = [c for c in cols_to_keep if c in all_data.columns]
+
+if 'id' not in all_data.columns:
+    all_data['id'] = range(len(all_data))
+    all_data['id'] = all_data['id'].astype(str)
+
+if 'id' not in available_cols:
+    available_cols.insert(0, 'id')
+
+metadata_df = all_data[available_cols].reset_index(drop=True)
+print(f"  Metadata prepared: {len(metadata_df)} records")
+
+# Step 6: Generate Semantic Embeddings (Sentence-BERT) - CHUNKED TO PREVENT CRASHES
+print("Phase 6: Generating BERT Embeddings (chunked)...")
 from src.vectorize import get_bert_embeddings
-final_combined_text = get_combined_text(metadata_df)
-bert_vectors = get_bert_embeddings(final_combined_text.tolist())
+
+bert_vectors_list = []
+
+# ⚡ CRITICAL: Process BERT in batches to prevent memory spikes
+for batch_num, i in enumerate(range(0, len(metadata_df), CHUNK_SIZE)):
+    batch_start = i
+    batch_end = min(i + CHUNK_SIZE, len(metadata_df))
+    print(f"  BERT batch {batch_num}: {batch_start} to {batch_end}/{len(metadata_df)}...")
+    
+    batch_df = metadata_df.iloc[batch_start:batch_end]
+    batch_texts = get_combined_text(batch_df).tolist()
+    
+    # Generate embeddings for this batch only
+    batch_embeddings = get_bert_embeddings(batch_texts)
+    
+    # ⚡ SAVE TO DISK immediately to free RAM (don't accumulate in memory)
+    chunk_file = os.path.join(ARTIFACTS_DIR, f"bert_chunk_{batch_num:04d}.npy")
+    np.save(chunk_file, batch_embeddings)
+    print(f"    Saved {chunk_file}")
+    
+    bert_vectors_list.append(chunk_file)
+
+# Step 7: Reload and stack BERT vectors from disk
+print("Phase 7: Stacking BERT embeddings from disk...")
+bert_vectors = np.vstack([np.load(f) for f in bert_vectors_list])
+print(f"  BERT vectors shape: {bert_vectors.shape}")
 
 # Explicit memory cleanup
 import gc
-del all_vectors, combined_sample, combined_chunk, final_combined_text
+del all_vectors, combined_sample, combined_chunk
 gc.collect()
 
-# Phase 5: Saving final artifacts
-print("Phase 5: Saving final artifacts...")
+# Step 8: Saving final artifacts
+print("Phase 8: Saving final artifacts...")
 joblib.dump(tfidf, os.path.join(ARTIFACTS_DIR, "tfidf.pkl"))
 joblib.dump(final_tfidf_vectors, os.path.join(ARTIFACTS_DIR, "job_vectors.pkl"))
 joblib.dump(bert_vectors, os.path.join(ARTIFACTS_DIR, "bert_job_vectors.pkl"))
 metadata_df.to_pickle(os.path.join(ARTIFACTS_DIR, "jobs.pkl"))
 
-print(f"Saved artifacts with {len(metadata_df)} records.")
+print(f"\n✅ Saved artifacts with {len(metadata_df)} records.")
+print(f"   - TF-IDF vectors: {final_tfidf_vectors.shape}")
+print(f"   - BERT vectors: {bert_vectors.shape}")
 print("--- Training Pipeline Complete! ---")

@@ -12,12 +12,21 @@ def get_bert_model(model_name='all-MiniLM-L6-v2'):
     """Lazy load the BERT model."""
     global _bert_model
     if _bert_model is None:
+        print(f"  📥 Loading Sentence-BERT model: {model_name}...")
         try:
             import torch
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            print(f"  🔧 Using device: {device}")
         except ImportError:
             device = 'cpu'
-        _bert_model = SentenceTransformer(model_name, device=device)
+            print(f"  🔧 Using device: cpu (torch not found)")
+        
+        try:
+            _bert_model = SentenceTransformer(model_name, device=device)
+            print(f"  ✅ BERT model loaded successfully.")
+        except Exception as e:
+            print(f"  ❌ Failed to load BERT model: {e}")
+            raise
     return _bert_model
 
 def get_tfidf_entities(corpus):
