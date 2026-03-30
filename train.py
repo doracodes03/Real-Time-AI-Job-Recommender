@@ -7,7 +7,7 @@ import re
 from src.preprocess import preprocess_text
 
 # Configuration - Optimized for i5 + limited RAM
-DATA_PATH = "data/jobs.csv"  # Use unified dataset - no train/test split needed
+DATA_PATH = "data/job_descriptions.csv"  # Use unified dataset - no train/test split needed
 ARTIFACTS_DIR = "artifacts"
 # Safe limit for i5 with BERT embeddings (50K-100K jobs)
 MAX_TOTAL_JOBS = 50000
@@ -96,6 +96,24 @@ print(f"  TF-IDF matrix shape: {final_tfidf_vectors.shape}")
 
 # Keep metadata with only essential columns
 print("Phase 5: Preparing metadata...")
+
+# Build a unified 'Location' column from the low-cased CSV columns
+# CSV has 'location' (city) and 'Country' — merge them into "City, Country"
+if 'Location' not in all_data.columns:
+    city_col    = 'location' if 'location' in all_data.columns else None
+    country_col = 'Country'  if 'Country'  in all_data.columns else None
+    if city_col and country_col:
+        all_data['Location'] = (
+            all_data[city_col].fillna('').astype(str).str.strip() + ', ' +
+            all_data[country_col].fillna('').astype(str).str.strip()
+        ).str.strip(', ')
+    elif city_col:
+        all_data['Location'] = all_data[city_col].fillna('').astype(str).str.strip()
+    elif country_col:
+        all_data['Location'] = all_data[country_col].fillna('').astype(str).str.strip()
+    else:
+        all_data['Location'] = 'Remote'
+
 cols_to_keep = ['Job Title', 'Company', 'Location', 'skills', 'Job Description', 'Experience']
 available_cols = [c for c in cols_to_keep if c in all_data.columns]
 
@@ -108,6 +126,7 @@ if 'id' not in available_cols:
 
 metadata_df = all_data[available_cols].reset_index(drop=True)
 print(f"  Metadata prepared: {len(metadata_df)} records")
+print(f"  Location sample: {metadata_df['Location'].head(3).tolist() if 'Location' in metadata_df.columns else 'N/A'}")
 
 # Step 6: Generate Semantic Embeddings (Sentence-BERT) - CHUNKED TO PREVENT CRASHES
 print("Phase 6: Generating BERT Embeddings (chunked)...")

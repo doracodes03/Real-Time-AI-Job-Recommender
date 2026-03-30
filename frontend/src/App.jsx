@@ -5,12 +5,15 @@ import ResumeUpload from './components/ResumeUpload';
 import RecommendationTabs from './components/RecommendationTabs';
 import JobCard from './components/JobCard';
 import JobDetailModal from './components/JobDetailModal';
+import AuthModal from './components/AuthModal';
 import { Rocket, Sparkles, AlertCircle, Briefcase } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000';
 
 function App() {
-  const [userId] = useState("user_" + Math.random().toString(36).substr(2, 9));
+  const [token, setToken] = useState(localStorage.getItem('token') || '');
+  const [user, setUser] = useState(localStorage.getItem('username') || '');
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('content');
   const [recommendations, setRecommendations] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -20,35 +23,59 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("data scientist");
   const [searchLocation, setSearchLocation] = useState("United States");
 
+  const handleAuthSuccess = (newToken, username) => {
+    setToken(newToken);
+    setUser(username);
+    localStorage.setItem('token', newToken);
+    localStorage.setItem('username', username);
+  };
+
+  const handleLogout = () => {
+    setToken('');
+    setUser('');
+    localStorage.removeItem('token');
+    localStorage.removeItem('username');
+    setRecommendations([]);
+  };
+
   const fetchRecommendations = async (type, resumeText = lastResume) => {
     if (!resumeText && type !== 'cf' && type !== 'saved' && type !== 'realtime') return;
     
+    // Auth check for protected routes
+    if (!token && type !== 'content') {
+      setIsAuthModalOpen(true);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
       let response;
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
       const formData = new FormData();
       formData.append('resume_text', resumeText);
 
       if (type === 'content') {
-        // ⚡ Use fast endpoint for instant results
-        response = await axios.post(`${API_BASE}/recommend/fast`, formData);
+        response = await axios.post(`${API_BASE}/recommend/fast`, formData, { headers });
       } else if (type === 'cf') {
-        response = await axios.get(`${API_BASE}/recommend/collaborative/${userId}`);
+        response = await axios.get(`${API_BASE}/recommend/collaborative/${user || 'anon'}`, { headers });
       } else if (type === 'hybrid') {
-        response = await axios.post(`${API_BASE}/recommend/hybrid/${userId}`, formData);
+        response = await axios.post(`${API_BASE}/recommend/hybrid/${user || 'anon'}`, formData, { headers });
       } else if (type === 'saved') {
-        response = await axios.get(`${API_BASE}/recommend/saved/${userId}`);
+        response = await axios.get(`${API_BASE}/recommend/saved/${user || 'anon'}`, { headers });
       } else if (type === 'realtime') {
         formData.append('query', searchQuery);
         formData.append('location', searchLocation);
-        response = await axios.post(`${API_BASE}/recommend/realtime/${userId}`, formData);
+        response = await axios.post(`${API_BASE}/recommend/realtime/${user || 'anon'}`, formData, { headers });
       }
       
       setRecommendations(response.data.recommendations);
     } catch (err) {
       console.error(err);
-      if (err.response?.status === 400) {
+      if (err.response?.status === 401) {
+        setError("Please login to access this feature.");
+        setIsAuthModalOpen(true);
+      } else if (err.response?.status === 400) {
         setError("Error: " + err.response.data.detail);
       } else {
         setError("Failed to fetch recommendations. Is the backend running?");
@@ -64,18 +91,26 @@ function App() {
   };
 
   const handleInteraction = async (jobId, type) => {
+    if (!token) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+
     try {
       await axios.post(`${API_BASE}/interaction`, {
-        user_id: userId,
         job_id: jobId,
         interaction_type: type
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
       });
-      // Optionally refresh CF/Hybrid if on that tab
       if (activeTab !== 'content') {
         fetchRecommendations(activeTab);
       }
     } catch (err) {
       console.error("Interaction failed", err);
+      if (err.response?.status === 401) {
+        setIsAuthModalOpen(true);
+      }
     }
   };
 
@@ -87,7 +122,14 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20">
-      <Navbar userId={userId} />
+      <Navbar user={user} onLoginClick={() => setIsAuthModalOpen(true)} onLogout={handleLogout} />
+      
+      <AuthModal 
+        isOpen={isAuthModalOpen} 
+        onClose={() => setIsAuthModalOpen(false)} 
+        onAuthSuccess={handleAuthSuccess}
+        API_BASE={API_BASE}
+      />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-10">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">

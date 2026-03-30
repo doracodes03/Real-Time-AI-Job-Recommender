@@ -53,7 +53,7 @@ const JobDetailModal = ({ job, resumeText, onClose, onApply }) => {
               <h2 className="text-2xl font-black text-slate-900 leading-tight">{job['Job Title']}</h2>
               <div className="flex items-center gap-2 mt-1 text-slate-500 font-medium">
                 <Building2 size={16} />
-                <span>{job['Company Name']}</span>
+                <span>{job['Company'] || job['Company Name']}</span>
               </div>
             </div>
           </div>
@@ -102,7 +102,7 @@ const JobDetailModal = ({ job, resumeText, onClose, onApply }) => {
           <div>
             <h3 className="text-lg font-bold text-slate-900 mb-4">Required Skills</h3>
             <div className="flex flex-wrap gap-2">
-              {job.Skills?.split(',').map((skill, i) => (
+              {(job.skills || job.Skills)?.split(',').map((skill, i) => (
                 <span key={i} className="px-4 py-2 bg-indigo-50 text-indigo-700 rounded-xl text-xs font-bold border border-indigo-100">
                   {skill.trim()}
                 </span>

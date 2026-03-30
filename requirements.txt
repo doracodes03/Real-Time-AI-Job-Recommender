@@ -8,3 +8,9 @@ pydantic
 joblib
 scipy
 sentence-transformers
+fastapi
+uvicorn
+requests
+passlib[bcrypt]
+python-jose[cryptography]
+python-multipart

@@ -63,40 +63,52 @@ def recommend_jobs(
     """
     Updated Hybrid Recommender:
 
-    - 0.6 Embedding similarity (primary signal) - skip if skip_bert_embedding=True
-    - 0.2 TF-IDF similarity (keyword precision)
-    - 0.15 Skill overlap (structured signal)
-    - 0.05 Experience (minor boost)
+    Full mode : 0.60 Semantic + 0.15 TF-IDF + 0.20 Skill + 0.05 Exp
     """
 
     resume_text = resume_data.get("text", "")
 
     # =================================================================
-    # STAGE 1: Fast Filtering (Vectorized)
+    # STAGE 1: Fast Filtering (Vectorized — raw cosine, no normalization)
     # =================================================================
-    # 0.6 Semantic + 0.4 TF-IDF
-    
-    # 1. TF-IDF Similarity (always fast)
-    resume_vec = tfidf.transform([resume_text])
-    tfidf_scores = get_similarity(resume_vec, job_vectors)
-    
-    # 2. Embedding Similarity (Fast if vectors are pre-computed)
-    if bert_job_vectors is not None and not skip_bert_embedding:
-        resume_emb = get_bert_embeddings([resume_text])[0]
-        semantic_scores = get_similarity(resume_emb, bert_job_vectors)
-    else:
-        semantic_scores = tfidf_scores
+    # Raw cosine similarity is already on [0,1] for non-negative TF-IDF
+    # vectors. Min-max normalization collapsed all tied jobs to score=1.0,
+    # which is WHY 20x the same job appeared. Use raw scores instead.
 
-    df["tfidf_score"] = tfidf_scores
+    # 1. TF-IDF Similarity
+    skills_str = " ".join(resume_data.get("skills", []))
+    enriched_text = resume_text + " " + skills_str if skills_str else resume_text
+    resume_vec = tfidf.transform([enriched_text])
+    tfidf_scores = get_similarity(resume_vec, job_vectors)          # raw [0,1]
+
+    # 2. BERT Semantic Similarity (always computed — one forward pass ~50ms)
+    if bert_job_vectors is not None:
+        resume_emb = get_bert_embeddings([resume_text])[0]
+        semantic_scores = get_similarity(resume_emb, bert_job_vectors)  # raw [0,1]
+    else:
+        semantic_scores = np.zeros_like(tfidf_scores)
+
+    df["tfidf_score"]    = tfidf_scores
     df["semantic_score"] = semantic_scores
-    
-    # Initial Draft Score (no skills/exp yet)
-    df["draft_score"] = (0.7 * df["semantic_score"]) + (0.3 * df["tfidf_score"])
+
+    print(f"  [DEBUG] TF-IDF  top-5 (raw): {sorted(tfidf_scores, reverse=True)[:5]}")
+    print(f"  [DEBUG] Semantic top-5 (raw): {sorted(semantic_scores, reverse=True)[:5]}")
+
+    # Draft score — BERT semantic is the primary tie-breaker
+    if bert_job_vectors is not None:
+        df["draft_score"] = (0.7 * df["semantic_score"]) + (0.3 * df["tfidf_score"])
+    else:
+        df["draft_score"] = df["tfidf_score"]
+
+    # Jitter (0.01 scale) breaks remaining exact ties; seeded so same resume
+    # always returns the same ordered list (deterministic results)
+    np.random.seed(hash(resume_text) % (2**31))
+    df["draft_score"] += np.random.uniform(0, 0.01, len(df))
     
     # =================================================================
-    # STAGE 2: Detailed Re-ranking (Top 500)
+    # STAGE 2: Detailed Re-ranking (Top 1000)
     # =================================================================
-    RE_RANK_N = min(500, len(df))
+    RE_RANK_N = min(1000, len(df))        # larger pool → more diverse output
     top_candidates = df.nlargest(RE_RANK_N, "draft_score").copy()
     
     # Quick duplicate removal on top candidates to save time
@@ -110,7 +122,7 @@ def recommend_jobs(
     if 'comp' in norm_temp.columns: subset.append('comp')
     top_candidates = top_candidates.loc[norm_temp.drop_duplicates(subset=subset, keep='first').index]
     
-    print(f"  ⚡ Re-ranking top {len(top_candidates)} unique candidates...")
+    print(f"  [RANK] Re-ranking top {len(top_candidates)} unique candidates...")
     
     # 3. Skill Scores (BATCH OPTIMIZED)
     resume_skills = resume_data.get("skills")
@@ -169,6 +181,9 @@ def recommend_jobs(
     
     # =================================================================
     # STAGE 3: Final Hybrid Score
+    # FIX 2: Different weight splits for fast vs full mode
+    # =================================================================
+    # STAGE 3: Final Hybrid Score
     # =================================================================
     top_candidates["final_score"] = (
         (0.60 * top_candidates["semantic_score"]) +
@@ -176,23 +191,58 @@ def recommend_jobs(
         (0.20 * top_candidates["skill_score"]) +
         (0.05 * top_candidates["exp_score"])
     )
-    
-    results = top_candidates.sort_values(by="final_score", ascending=False)
-    
-    # Final aggressive drop
-    norm_final = pd.DataFrame()
-    norm_final['title'] = results['Job Title'].fillna('').astype(str).str.strip().str.lower()
-    if comp_col:
-        norm_final['comp'] = results[comp_col].fillna('').astype(str).str.strip().str.lower()
-    
-    loc_col = 'Location' if 'Location' in results.columns else 'location' if 'location' in results.columns else None
-    if loc_col:
-        norm_final['loc'] = results[loc_col].fillna('').astype(str).str.strip().str.lower()
 
-    subset = ['title']
-    if 'comp' in norm_final.columns: subset.append('comp')
-    if 'loc' in norm_final.columns: subset.append('loc')
-    
-    results = results.loc[norm_final.drop_duplicates(subset=subset, keep='first').index]
-        
-    return results.head(top_n)
+    # Carry draft_score forward as a micro tiebreaker so when hundreds
+    # of jobs share identical semantic/TF-IDF scores the jitter from
+    # Stage 1 still propagates to the final ordering.
+    top_candidates["final_score"] += 0.001 * top_candidates["draft_score"]
+
+    print(f"  [DEBUG] Final top-5 scores: {top_candidates['final_score'].nlargest(5).tolist()}")
+
+    results = top_candidates.sort_values(by="final_score", ascending=False)
+
+    # ------------------------------------------------------------------
+    # Diversity-aware dedup
+    # Goal: up to top_n results with NO exact-duplicate listings AND
+    #       no more than MAX_PER_TITLE results with the same job title.
+    # This prevents "100x Sales Consultant" even when they all score identically.
+    # ------------------------------------------------------------------
+    MAX_PER_TITLE = 5   # max cards with the same title in the final list
+
+    comp_col_final = (
+        'Company' if 'Company' in results.columns
+        else 'Company Name' if 'Company Name' in results.columns
+        else None
+    )
+    loc_col_final = (
+        'Location' if 'Location' in results.columns
+        else 'location' if 'location' in results.columns
+        else None
+    )
+
+    seen_listings = set()   # exact duplicate guard (title+company+location)
+    title_counts  = {}      # per-title count for diversity cap
+    diverse_idx   = []
+
+    for idx, row in results.iterrows():
+        title = str(row.get('Job Title', '')).strip().lower()
+        comp  = str(row.get(comp_col_final, '') if comp_col_final else '').strip().lower()
+        loc   = str(row.get(loc_col_final,  '') if loc_col_final  else '').strip().lower()
+
+        listing_key = f"{title}|{comp}|{loc}"
+
+        if listing_key in seen_listings:
+            continue  # exact duplicate — skip
+
+        if title_counts.get(title, 0) >= MAX_PER_TITLE:
+            continue  # too many of this title already — skip
+
+        seen_listings.add(listing_key)
+        title_counts[title] = title_counts.get(title, 0) + 1
+        diverse_idx.append(idx)
+
+        if len(diverse_idx) >= top_n:
+            break
+
+    return results.loc[diverse_idx]
+

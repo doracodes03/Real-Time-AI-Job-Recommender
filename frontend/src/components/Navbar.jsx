@@ -1,7 +1,7 @@
 import React from 'react';
 import { Briefcase, Bell, Search, User } from 'lucide-react';
 
-const Navbar = ({ userId }) => {
+const Navbar = ({ userId, user, onLoginClick, onLogout }) => {
   return (
     <nav className="bg-white border-b border-slate-200 sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -23,21 +23,36 @@ const Navbar = ({ userId }) => {
               />
             </div>
           </div>
-
+ 
           <div className="flex items-center gap-4">
             <button className="p-2 text-slate-400 hover:bg-slate-50 hover:text-indigo-600 rounded-xl transition-all">
               <Bell size={20} />
             </button>
             <div className="h-8 w-[1px] bg-slate-200 mx-2"></div>
-            <div className="flex items-center gap-3 bg-slate-50 p-1.5 pr-4 rounded-xl border border-slate-200">
-              <div className="h-8 w-8 bg-indigo-100 rounded-lg flex items-center justify-center text-indigo-600">
-                <User size={18} />
+            
+            {user ? (
+              <div className="flex items-center gap-3 bg-slate-50 p-1.5 pr-4 rounded-xl border border-slate-200">
+                <div className="h-8 w-8 bg-indigo-100 rounded-lg flex items-center justify-center text-indigo-600">
+                  <User size={18} />
+                </div>
+                <div className="hidden sm:block">
+                  <p className="text-xs font-bold text-slate-900">{user}</p>
+                  <button 
+                    onClick={onLogout}
+                    className="text-[10px] text-indigo-600 font-bold hover:text-indigo-700 transition-colors uppercase tracking-wider"
+                  >
+                    Logout
+                  </button>
+                </div>
               </div>
-              <div className="hidden sm:block">
-                <p className="text-xs font-bold text-slate-900">User ID</p>
-                <p className="text-[10px] text-slate-500 font-medium">{userId}</p>
-              </div>
-            </div>
+            ) : (
+              <button 
+                onClick={onLoginClick}
+                className="bg-indigo-600 text-white font-bold py-2 px-6 rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+              >
+                Login
+              </button>
+            )}
           </div>
         </div>
       </div>
