@@ -1,0 +1,398 @@
+# Real-Time AI Job Recommender — System Architecture
+
+## High-Level System Overview
+
+```mermaid
+graph TB
+    subgraph CLIENT["🖥️ Client Layer (React + Vite)"]
+        UI["Dashboard UI"]
+        AUTH_UI["Auth Modal"]
+        RESUME["Resume Input"]
+        CARDS["Job Cards"]
+        RT["Real-Time Search"]
+    end
+
+    subgraph GATEWAY["🔒 API Gateway (FastAPI)"]
+        AUTH_EP["/register\n/login\n/token"]
+        CONTENT_EP["/recommend/content"]
+        FAST_EP["/recommend/fast"]
+        HYBRID_EP["/recommend/hybrid"]
+        CF_EP["/recommend/collaborative"]
+        RT_EP["/recommend/realtime"]
+        INTER_EP["/interaction"]
+        SAVED_EP["/recommend/saved"]
+    end
+
+    subgraph ML["🧠 ML Engine Layer"]
+        PREPROCESS["Preprocessor\n(preprocess.py)"]
+        RECOMMEND["Hybrid Ranker\n(recommend.py)"]
+        COLLAB["Item-Item CF\n(collaborative.py)"]
+        LLM_P["LLM Parser\n(llm_parser.py)"]
+        LLM_E["LLM Explainer\n(llm_explainer.py)"]
+    end
+
+    subgraph EMBEDDING["🔢 Embedding Engine (vectorize.py)"]
+        TFIDF_ENC["TF-IDF Encoder\n(sklearn)"]
+        BERT_ENC["BERT Encoder\nall-MiniLM-L6-v2\n(sentence-transformers)"]
+        COSINE["Cosine Similarity\nComputer"]
+    end
+
+    subgraph ARTIFACTS["📦 Precomputed Artifacts (artifacts/)"]
+        TFIDF_PKL["tfidf.pkl\n(Vocab + IDF weights)"]
+        JOB_VEC["job_vectors.pkl\n(Sparse 50K×1000)"]
+        BERT_VEC["bert_job_vectors.pkl\n(Dense 50K×384)"]
+        JOBS_PKL["jobs.pkl\n(Job Metadata)"]
+    end
+
+    subgraph STORAGE["💾 Data Storage (data/)"]
+        JOBS_CSV["job_descriptions.csv\n(Raw training data)"]
+        INTER_CSV["interactions.csv\n(User behavior log)"]
+        USERS_CSV["users.csv\n(Hashed credentials)"]
+    end
+
+    subgraph EXTERNAL["🌐 External Services"]
+        JSEARCH["JSearch API\n(RapidAPI)\nReal-time job listings"]
+        OLLAMA["Ollama / LLM\n(Local)"]
+    end
+
+    subgraph TRAINING["⚙️ Offline Training Pipeline (train.py)"]
+        T1["1. Load & Sample\n50K jobs"]
+        T2["2. TF-IDF Fit\n+ Transform"]
+        T3["3. BERT Encode\nChunked 256/batch"]
+        T4["4. Save Artifacts"]
+    end
+
+    CLIENT -->|"JWT Bearer Token"| GATEWAY
+    GATEWAY --> ML
+    ML --> EMBEDDING
+    EMBEDDING --> ARTIFACTS
+    GATEWAY --> STORAGE
+    GATEWAY --> EXTERNAL
+    JOBS_CSV --> TRAINING
+    TRAINING --> ARTIFACTS
+```
+
+---
+
+## Authentication & Session Flow
+
+```mermaid
+sequenceDiagram
+    participant U as 👤 User (Browser)
+    participant FE as React Frontend
+    participant API as FastAPI Backend
+    participant AUTH as src/auth.py
+    participant DB as data/users.csv
+
+    U->>FE: Click Register / Login
+    FE->>API: POST /register (username, password)
+    API->>AUTH: get_password_hash(password)
+    AUTH->>DB: Append hashed row
+    DB-->>API: OK
+    API-->>FE: 200 "Registered"
+
+    U->>FE: Login credentials
+    FE->>API: POST /login (OAuth2PasswordRequestForm)
+    API->>AUTH: verify_password()
+    AUTH->>DB: lookup username
+    DB-->>AUTH: hashed_password
+    AUTH-->>API: ✅ verified
+    API->>AUTH: create_access_token (HS256, 7-day)
+    AUTH-->>API: JWT token
+    API-->>FE: {access_token, token_type}
+    FE->>FE: Store token in localStorage
+
+    Note over FE,API: Every protected request sends Bearer token
+    FE->>API: POST /recommend/content + Authorization: Bearer <token>
+    API->>AUTH: get_current_user(token)
+    AUTH->>AUTH: jwt.decode → username
+    AUTH-->>API: User object
+    API-->>FE: Recommendations
+```
+
+---
+
+## Offline Training Pipeline (train.py)
+
+```mermaid
+flowchart LR
+    A["📂 data/job_descriptions.csv\n(up to 1.7GB raw CSV)"]
+    B["Sample 50K jobs\nrandom_state=42"]
+    C["get_combined_text()\nTitle + Skills + Desc[:500]\npreprocess_text applied"]
+
+    D["TfidfVectorizer.fit()\non first 2000 rows\nmax_features=1000\nngrams 1-2\nstop_words=english"]
+    E["TfidfVectorizer.transform()\non all 50K in 256-row chunks"]
+    F["scipy.sparse.vstack()\nFinal: 50K × 1000 sparse"]
+
+    G["SentenceTransformer\nall-MiniLM-L6-v2\ndevice = CUDA or CPU"]
+    H["Encode 256 rows\nat a time"]
+    I["Save bert_chunk_XXXX.npy\nto disk instantly\nfrees RAM per batch"]
+    J["np.vstack all chunks\nFinal: 50K × 384 dense"]
+
+    K["💾 Save Artifacts"]
+    L["tfidf.pkl"]
+    M["job_vectors.pkl"]
+    N["bert_job_vectors.pkl"]
+    O["jobs.pkl\n(metadata only)"]
+
+    A --> B --> C
+    C --> D --> E --> F
+    C --> G --> H --> I --> J
+    F --> K
+    J --> K
+    K --> L & M & N & O
+```
+
+---
+
+## Hybrid Recommendation Engine — 3-Stage Pipeline (recommend.py)
+
+```mermaid
+flowchart TD
+    INPUT["📄 Resume Text\n+ Skills + Experience"]
+
+    subgraph STAGE1["Stage 1 — Fast Candidate Filtering (All 50K jobs)"]
+        S1A["TF-IDF transform(resume)\n→ sparse 1×1000 vector"]
+        S1B["cosine_similarity(resume_tfidf, job_vectors)\n→ 50K scores  raw [0,1]"]
+        S1C["BERT encode(resume)\n→ dense 384-dim vector"]
+        S1D["cosine_similarity(resume_bert, bert_job_vectors)\n→ 50K scores  raw [0,1]"]
+        S1E["draft_score = 0.7×semantic + 0.3×tfidf\n+ uniform jitter(0, 0.01) for tie-breaking"]
+        S1F["nlargest(1000, draft_score)\n→ Deduplicate by title+company"]
+    end
+
+    subgraph STAGE2["Stage 2 — Detailed Re-ranking (Top 1000 only)"]
+        S2A["Extract job skill lists\nfrom top-1000 rows"]
+        S2B["BERT encode all unique\njob skills (batched)"]
+        S2C["BERT encode\nresume skills"]
+        S2D["sim_matrix = dot(resume_skill_embs, job_skill_embs.T)\ncount(sim >= 0.75) / len(job_skills)\n→ skill_score per job"]
+        S2E["experience_score\n= clip(resume_exp / job_exp, 0, 1)"]
+    end
+
+    subgraph STAGE3["Stage 3 — Final Hybrid Score"]
+        S3["final_score =\n0.60 × semantic_score\n+ 0.15 × tfidf_score\n+ 0.20 × skill_score\n+ 0.05 × exp_score\n+ 0.001 × draft_score (tiebreak)"]
+    end
+
+    subgraph DEDUP["Diversity-Aware Deduplication"]
+        D1["Sort by final_score DESC"]
+        D2["seen_listings set\n(title + company + location)"]
+        D3["title_counts dict\nMAX_PER_TITLE = 5"]
+        D4["Yield until top_n collected"]
+    end
+
+    INPUT --> STAGE1
+    S1A --> S1B
+    S1C --> S1D
+    S1B & S1D --> S1E --> S1F
+    S1F --> STAGE2
+    S2A --> S2B
+    S2C --> S2D
+    S2B --> S2D
+    S2D & S2E --> STAGE3
+    S3 --> DEDUP
+    D1 --> D2 --> D3 --> D4
+    D4 --> RESULTS["✅ Top-N Unique Jobs"]
+```
+
+---
+
+## TF-IDF vs BERT Embedding Detail
+
+```mermaid
+graph LR
+    subgraph TF_IDF["TF-IDF (Lexical Matching)"]
+        direction TB
+        T1["Input: raw text string"]
+        T2["Tokenize + remove stopwords\nngrams (1,2)"]
+        T3["Vocab: 1000 most frequent terms"]
+        T4["TF × IDF weight per term"]
+        T5["Output: sparse vector\n1 × 1000  most dims = 0"]
+        T1-->T2-->T3-->T4-->T5
+    end
+
+    subgraph BERT_SEC["Sentence-BERT (Semantic Matching)"]
+        direction TB
+        B1["Input: raw text string"]
+        B2["WordPiece tokenizer\n(max 512 tokens)"]
+        B3["12-layer Transformer\nall-MiniLM-L6-v2"]
+        B4["Mean pooling over\ntoken embeddings"]
+        B5["Output: dense vector\n1 × 384  all dims active"]
+        B1-->B2-->B3-->B4-->B5
+    end
+
+    subgraph HYBRID_SEC["Hybrid Score Fusion"]
+        direction TB
+        H1["tfidf_cosine  0.15 weight\nExact keyword matching"]
+        H2["bert_cosine   0.60 weight\nSemantic/contextual meaning"]
+        H3["skill_cosine  0.20 weight\nPer-skill BERT similarity"]
+        H4["exp_ratio     0.05 weight\nSeniority alignment"]
+        H5["Σ → final_score"]
+        H1 & H2 & H3 & H4 --> H5
+    end
+
+    T5 -->|cosine| H1
+    B5 -->|cosine| H2
+    B5 -->|per-skill cosine| H3
+```
+
+---
+
+## Collaborative Filtering Flow (collaborative.py)
+
+```mermaid
+flowchart TD
+    A["User interacts with a job\nclickweight=1  saveweight=2  applyweight=3"]
+    B["POST /interaction\n→ save_interaction()"]
+    C["Append row to\ndata/interactions.csv"]
+
+    D["get_cf_recommendations(user_id)"]
+    E["load_interactions()\nfrom CSV"]
+    F["build_user_item_matrix()\ngroupby user+job → pivot\nrows=users  cols=jobs\nvalues=max weight  fillna=0"]
+
+    G["cosine_similarity(matrix.T)\nCompare job columns\n→ Item-Item similarity matrix\nshape: n_jobs × n_jobs"]
+
+    H["user_ratings = matrix.loc[user_id]\nget all jobs user interacted with"]
+    I["For each unseen job:\npred_score = Σ sim×rating / Σ sim\nweighted sum of similarities"]
+    J["Sort by pred_score DESC\n→ Top-N CF recommendations"]
+
+    K["get_hybrid_recommendations()\nnorm_content = final_score / max\nnorm_cf = cf_score / max\nhybrid = 0.6×content + 0.4×CF"]
+
+    COLD["⚠️ Cold Start:\nUser has NO interactions\n→ CF returns empty\n→ 100% content-based scoring"]
+
+    A --> B --> C
+    D --> E --> F --> G --> H --> I --> J --> K
+    C -.->|next request| E
+    D -.->|new user| COLD
+```
+
+---
+
+## Real-Time Job Search Flow (JSearch API)
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant FE as Frontend
+    participant API as FastAPI
+    participant JS as JSearch API (RapidAPI)
+    participant ML as recommend_jobs()
+
+    U->>FE: Enter query + location + paste resume
+    FE->>API: POST /recommend/realtime/{user_id}\n(query, location, resume_text, page)
+
+    API->>JS: GET jsearch.p.rapidapi.com/search\n?query="python developer jobs in NYC"
+    JS-->>API: JSON list of live job postings
+
+    API->>API: Convert to DataFrame\nid, Job Title, Company, Location,\nJob Description, apply_url
+
+    API->>API: tfidf.transform(job_descriptions)\n→ realtime TF-IDF vectors
+
+    API->>ML: recommend_jobs(resume, realtime_df,\ntfidf, realtime_vectors,\nbert=None  skipped for speed)
+
+    ML-->>API: Ranked DataFrame with final_score
+
+    API->>API: Paginate results\npage × page_size
+
+    API-->>FE: {recommendations, total, page}
+    FE-->>U: Live job cards with apply_url links
+```
+
+---
+
+## Data Storage Layer
+
+```mermaid
+erDiagram
+    USERS {
+        string username PK
+        string hashed_password
+    }
+
+    INTERACTIONS {
+        string user_id FK
+        string job_id FK
+        string interaction_type "click, save, apply"
+        datetime timestamp
+    }
+
+    JOBS_METADATA {
+        string id PK
+        string job_title
+        string company
+        string location
+        string skills
+        text job_description
+        string experience
+    }
+
+    USERS ||--o{ INTERACTIONS : "performs"
+    JOBS_METADATA ||--o{ INTERACTIONS : "receives"
+```
+
+---
+
+## Artifact Loading Strategy (api.py startup)
+
+```mermaid
+flowchart LR
+    START["uvicorn starts\napi.py loads"]
+
+    A["tfidf.pkl ✅\nTfidfVectorizer object\n~42KB"]
+    B["job_vectors.pkl ✅\nscipy sparse matrix\n50K×1000 ~17MB"]
+
+    C{bert_job_vectors.pkl\nexists?}
+    D["Load single .pkl\n~77MB  fastest"]
+    E{bert_chunk_*.npy\nexists?}
+    F["np.vstack 196 chunks\nof 256 rows each"]
+    G["bert=None\nFallback to TF-IDF only"]
+
+    H["jobs.pkl ✅\nPandas DataFrame\n~9MB"]
+
+    I["🚀 Backend Ready\nAll globals set:\ntfidf, job_vectors,\nbert_job_vectors, df"]
+
+    START --> A & B & H
+    START --> C
+    C -->|Yes| D
+    C -->|No| E
+    E -->|Yes| F
+    E -->|No| G
+    D & F & G --> I
+    A & B & H --> I
+```
+
+---
+
+## Component Responsibility Summary
+
+| File | Layer | Responsibility |
+|------|-------|---------------|
+| `train.py` | Offline | Fit TF-IDF, encode BERT, save artifacts |
+| `api.py` | API | Route requests, load artifacts, auth middleware |
+| `src/recommend.py` | ML Core | 3-stage hybrid ranking pipeline |
+| `src/vectorize.py` | Embedding | TF-IDF + Sentence-BERT wrappers, cosine sim |
+| `src/preprocess.py` | NLP | Text cleaning, entity extraction, semantic skill overlap |
+| `src/collaborative.py` | CF | Interaction logging, user-item matrix, item-item CF, hybrid blend |
+| `src/auth.py` | Security | Password hashing, JWT create/verify, OAuth2 flow |
+| `src/llm_parser.py` | NLP | Parse resume → structured JSON via LLM |
+| `src/llm_explainer.py` | NLP | Generate human-readable job match explanations |
+| `src/real_jobs.py` | External | JSearch API client utilities |
+| `frontend/` | UI | React dashboard, auth modal, job cards, search |
+
+---
+
+## Endpoint Speed vs. Quality Tradeoff
+
+```mermaid
+quadrantChart
+    title Speed vs Quality of Recommendation Endpoints
+    x-axis "Slower" --> "Faster"
+    y-axis "Lower Quality" --> "Higher Quality"
+    quadrant-1 "Best"
+    quadrant-2 "Rich but slow"
+    quadrant-3 "Poor fit"
+    quadrant-4 "Fast baseline"
+    /recommend/hybrid: [0.20, 0.95]
+    /recommend/content: [0.45, 0.85]
+    /recommend/realtime: [0.40, 0.60]
+    /recommend/collaborative: [0.70, 0.55]
+    /recommend/fast: [0.90, 0.40]
+```

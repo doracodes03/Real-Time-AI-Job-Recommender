@@ -26,7 +26,7 @@ def parse_resume_with_llm(resume_text: str) -> dict:
             "education": "Unknown"
         }
 
-    client = genai.Client()
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     
     prompt = f"""
     You are an expert technical recruiter. Parse the following resume text and extract the key information.

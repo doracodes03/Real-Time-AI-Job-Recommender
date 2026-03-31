@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()  # Load .env FIRST so GEMINI_API_KEY is available everywhere
+
 from src.preprocess import preprocess_text
 import joblib
 import os
@@ -335,14 +338,34 @@ def recommend_hybrid(user_id: str, resume_text: str = Form(...), current_user: U
     return {"recommendations": unique_recs[:10]}
 
 @app.post("/recommend/explain")
-def explain_job(job_id: str = Form(...), resume_text: str = Form(...)):
-    # 1. Find the job in our global dataframe
+def explain_job(
+    job_id: str = Form(...),
+    resume_text: str = Form(...),
+    # Optional inline job details — used for real-time / JSearch jobs not in local df
+    job_title_inline: str = Form(None),
+    job_desc_inline: str = Form(None),
+    job_skills_inline: str = Form(None),
+):
+    # 1. Try to find the job in our static dataframe
     job_row = df[df['id'] == str(job_id)]
+
     if job_row.empty:
-        raise HTTPException(status_code=404, detail="Job not found in current dataset")
-    
-    job = job_row.iloc[0]
-    
+        # Real-time job (e.g. from JSearch) — use inline fields passed by the frontend
+        if not job_title_inline and not job_desc_inline:
+            raise HTTPException(
+                status_code=404,
+                detail="Job not found in dataset and no inline details provided."
+            )
+        job_title  = job_title_inline  or "Unknown Title"
+        job_desc   = job_desc_inline   or "No description available"
+        job_skills = job_skills_inline or "Not specified"
+        print(f"[Explain] Using inline job details for real-time job id={job_id}")
+    else:
+        job = job_row.iloc[0]
+        job_skills = job.get('skills') or job.get('Skills') or "Not specified"
+        job_title  = job.get('Job Title') or "Unknown Title"
+        job_desc   = job.get('Job Description') or "No description available"
+
     # 2. Parse resume to get structured data
     try:
         resume_data = parse_resume_with_llm(resume_text)
@@ -351,11 +374,6 @@ def explain_job(job_id: str = Form(...), resume_text: str = Form(...)):
         resume_data = {"skills": [], "roles": [], "experience": 0, "education": "Unknown"}
 
     # 3. Generate explanation
-    # Handle both 'skills' and 'Skills' column names (data uses lowercase 'skills')
-    job_skills = job.get('skills') or job.get('Skills') or "Not specified"
-    job_title = job.get('Job Title') or "Unknown Title"
-    job_desc = job.get('Job Description') or "No description available"
-    
     try:
         explanation = explain_match(
             resume_data=resume_data,

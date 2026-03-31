@@ -1,6 +1,9 @@
 # src/llm_explainer.py
 
 import os
+from dotenv import load_dotenv
+load_dotenv()  # Ensure .env is loaded even if this module is imported before api.py runs load_dotenv
+
 from pydantic import BaseModel
 from google import genai
 
@@ -22,7 +25,8 @@ def explain_match(resume_data: dict, job_title: str, job_desc: str, job_skills: 
             "suggestions": ["Add API key to .env"]
         }
 
-    client = genai.Client()
+    api_key = os.getenv("GEMINI_API_KEY")
+    client = genai.Client(api_key=api_key)
     
     prompt = f"""
     You are an expert technical recruiter.

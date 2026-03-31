@@ -78,8 +78,11 @@ def get_cf_recommendations(user_id, jobs_df, top_n=5):
     # Create output dataframe
     results = []
     for job_id, score in sorted_scores[:top_n]:
-        # get job details
-        job_info = jobs_df[jobs_df['id'] == job_id].iloc[0].to_dict()
+        # get job details — skip if job_id no longer exists in jobs_df
+        matched = jobs_df[jobs_df['id'] == job_id]
+        if matched.empty:
+            continue
+        job_info = matched.iloc[0].to_dict()
         job_info['cf_score'] = score
         results.append(job_info)
         

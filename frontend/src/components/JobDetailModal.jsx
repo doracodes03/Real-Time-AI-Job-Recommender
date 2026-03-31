@@ -21,12 +21,17 @@ const JobDetailModal = ({ job, resumeText, onClose, onApply }) => {
       const formData = new FormData();
       formData.append('job_id', job.id);
       formData.append('resume_text', resumeText);
+      // Always send inline job fields so real-time (JSearch) jobs work too
+      formData.append('job_title_inline', job['Job Title'] || '');
+      formData.append('job_desc_inline', job['Job Description'] || '');
+      formData.append('job_skills_inline', (job.skills || job.Skills || ''));
       
       const response = await axios.post(`http://localhost:8000/recommend/explain`, formData);
       setExplanation(response.data);
     } catch (err) {
       console.error(err);
-      setError("Failed to generate AI explanation. Check your API key and connection.");
+      const detail = err?.response?.data?.detail;
+      setError(detail || "Failed to generate AI explanation. Check your API key and connection.");
     } finally {
       setLoading(false);
     }
