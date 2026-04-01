@@ -6,7 +6,7 @@ import RecommendationTabs from './components/RecommendationTabs';
 import JobCard from './components/JobCard';
 import JobDetailModal from './components/JobDetailModal';
 import AuthModal from './components/AuthModal';
-import { Rocket, Sparkles, AlertCircle, Briefcase } from 'lucide-react';
+import { Rocket, Sparkles, AlertCircle, Briefcase, MapPin, SlidersHorizontal, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -22,6 +22,15 @@ function App() {
   const [selectedJob, setSelectedJob] = useState(null);
   const [searchQuery, setSearchQuery] = useState("data scientist");
   const [searchLocation, setSearchLocation] = useState("United States");
+  
+  // New Global Filters
+  const [filterLocation, setFilterLocation] = useState("");
+  const [filterExperience, setFilterExperience] = useState("");
+  
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalResults, setTotalResults] = useState(0);
 
   const handleAuthSuccess = (newToken, username) => {
     setToken(newToken);
@@ -38,7 +47,7 @@ function App() {
     setRecommendations([]);
   };
 
-  const fetchRecommendations = async (type, resumeText = lastResume) => {
+  const fetchRecommendations = async (type, resumeText = lastResume, pageToFetch = currentPage) => {
     if (!resumeText && type !== 'cf' && type !== 'saved' && type !== 'realtime') return;
     
     // Auth check for protected routes
@@ -54,12 +63,18 @@ function App() {
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
       const formData = new FormData();
       formData.append('resume_text', resumeText);
+      formData.append('page', pageToFetch);
+      formData.append('page_size', 10);
 
       if (type === 'content') {
+        if (filterLocation) formData.append('location', filterLocation);
+        if (filterExperience) formData.append('max_experience', filterExperience);
         response = await axios.post(`${API_BASE}/recommend/fast`, formData, { headers });
       } else if (type === 'cf') {
-        response = await axios.get(`${API_BASE}/recommend/collaborative/${user || 'anon'}`, { headers });
+        response = await axios.get(`${API_BASE}/recommend/collaborative/${user || 'anon'}?page=${pageToFetch}&page_size=10`, { headers });
       } else if (type === 'hybrid') {
+        if (filterLocation) formData.append('location', filterLocation);
+        if (filterExperience) formData.append('max_experience', filterExperience);
         response = await axios.post(`${API_BASE}/recommend/hybrid/${user || 'anon'}`, formData, { headers });
       } else if (type === 'saved') {
         response = await axios.get(`${API_BASE}/recommend/saved/${user || 'anon'}`, { headers });
@@ -69,7 +84,19 @@ function App() {
         response = await axios.post(`${API_BASE}/recommend/realtime/${user || 'anon'}`, formData, { headers });
       }
       
-      setRecommendations(response.data.recommendations);
+      const payload = response.data;
+      setRecommendations(payload.recommendations || []);
+      
+      // Update pagination metadata if returned by endpoint
+      if (payload.total !== undefined) {
+        setTotalResults(payload.total);
+        setTotalPages(Math.ceil(payload.total / (payload.page_size || 10)));
+      } else {
+        setTotalResults(payload.recommendations?.length || 0);
+        setTotalPages(1);
+      }
+      setCurrentPage(pageToFetch);
+
     } catch (err) {
       console.error(err);
       if (err.response?.status === 401) {
@@ -87,7 +114,8 @@ function App() {
 
   const handleResumeUpload = (text) => {
     setLastResume(text);
-    fetchRecommendations(activeTab, text);
+    setCurrentPage(1);
+    fetchRecommendations(activeTab, text, 1);
   };
 
   const handleInteraction = async (jobId, type) => {
@@ -115,8 +143,9 @@ function App() {
   };
 
   useEffect(() => {
+    setCurrentPage(1);
     if ((lastResume || activeTab === 'cf' || activeTab === 'saved') && activeTab !== 'realtime') {
-      fetchRecommendations(activeTab);
+      fetchRecommendations(activeTab, lastResume, 1);
     }
   }, [activeTab]);
 
@@ -139,6 +168,62 @@ function App() {
             <div className="sticky top-24">
               <ResumeUpload onUpload={handleResumeUpload} loading={loading} />
               
+              {/* New Search Filters Panel */}
+              <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 mt-6 mb-6">
+                <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+                  <SlidersHorizontal size={20} className="text-indigo-600" />
+                  Search Preferences
+                </h3>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-1">
+                      Target Location
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <MapPin size={16} className="text-slate-400" />
+                      </div>
+                      <input
+                        type="text"
+                        value={filterLocation}
+                        onChange={(e) => setFilterLocation(e.target.value)}
+                        placeholder="e.g. San Francisco, CA"
+                        className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors text-sm"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-1">
+                      Max Experience (Years)
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Briefcase size={16} className="text-slate-400" />
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={filterExperience}
+                        onChange={(e) => setFilterExperience(e.target.value)}
+                        placeholder="e.g. 3"
+                        className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors text-sm"
+                      />
+                    </div>
+                  </div>
+                  
+                  <button 
+                    onClick={() => { setCurrentPage(1); fetchRecommendations(activeTab, lastResume, 1); }}
+                    disabled={!lastResume || loading}
+                    className="w-full mt-4 bg-indigo-50 text-indigo-700 font-bold py-2 px-4 rounded-xl hover:bg-indigo-100 transition-colors text-sm flex justify-center items-center disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Apply & Refresh
+                  </button>
+                </div>
+              </div>
+
               <div className="bg-indigo-600 rounded-2xl p-6 text-white overflow-hidden relative shadow-xl shadow-indigo-200">
                 <Rocket className="absolute -right-4 -bottom-4 text-indigo-500 opacity-50 rotate-12" size={120} />
                 <h3 className="text-xl font-bold mb-2 flex items-center gap-2">
@@ -201,7 +286,7 @@ function App() {
                   </div>
                   <div className="flex items-end">
                     <button
-                      onClick={() => fetchRecommendations('realtime')}
+                      onClick={() => { setCurrentPage(1); fetchRecommendations('realtime', lastResume, 1); }}
                       disabled={!lastResume || loading}
                       className="w-full bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
@@ -239,16 +324,50 @@ function App() {
                 ))}
               </div>
             ) : recommendations.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {recommendations.map((job) => (
-                  <JobCard 
-                    key={job.id} 
-                    job={job} 
-                    onInteraction={handleInteraction}
-                    onSelect={setSelectedJob}
-                  />
-                ))}
-              </div>
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {recommendations.map((job) => (
+                    <JobCard 
+                      key={job.id} 
+                      job={job} 
+                      onInteraction={handleInteraction}
+                      onSelect={setSelectedJob}
+                    />
+                  ))}
+                </div>
+                
+                {totalPages > 1 && (
+                  <div className="flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-2xl border border-slate-200 mt-6 shadow-sm gap-4">
+                    <button 
+                      disabled={currentPage <= 1 || loading}
+                      onClick={() => {
+                        const newPage = currentPage - 1;
+                        fetchRecommendations(activeTab, lastResume, newPage);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50"
+                    >
+                      <ChevronLeft size={16} /> Previous
+                    </button>
+                    <div className="text-sm font-medium text-slate-500">
+                      Page <span className="text-indigo-600 font-bold">{currentPage}</span> of {totalPages} 
+                      <span className="text-slate-300 mx-3">|</span> 
+                      {totalResults} total matches
+                    </div>
+                    <button 
+                      disabled={currentPage >= totalPages || loading}
+                      onClick={() => {
+                        const newPage = currentPage + 1;
+                        fetchRecommendations(activeTab, lastResume, newPage);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50"
+                    >
+                      Next <ChevronRight size={16} />
+                    </button>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="bg-white rounded-3xl p-16 text-center border-2 border-dashed border-slate-200">
                 <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-6 text-slate-300">

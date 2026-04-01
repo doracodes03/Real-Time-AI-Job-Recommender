@@ -2,7 +2,7 @@
 
 import os
 from dotenv import load_dotenv
-load_dotenv()  # Ensure .env is loaded even if this module is imported before api.py runs load_dotenv
+load_dotenv(override=True)  # Ensure .env is loaded even if this module is imported before api.py runs load_dotenv
 
 from pydantic import BaseModel
 from google import genai
@@ -44,14 +44,30 @@ def explain_match(resume_data: dict, job_title: str, job_desc: str, job_skills: 
     Return ONLY a JSON matching the requested schema.
     """
     
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
-        contents=prompt,
-        config={
-            'response_mime_type': 'application/json',
-            'response_schema': JobExplanation,
-        },
-    )
+    import time
+    max_retries = 3
+    response = None
+    
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config={
+                    'response_mime_type': 'application/json',
+                    'response_schema': JobExplanation,
+                },
+            )
+            break
+        except Exception as e:
+            err_str = str(e).upper()
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "QUOTA" in err_str or "LIMIT" in err_str:
+                if attempt < max_retries - 1:
+                    wait_time = 6 * (attempt + 1)
+                    print(f"  [AI Explainer] Gemini 429 Limit Hit. Waiting {wait_time}s to retry (Attempt {attempt+1}/{max_retries})...")
+                    time.sleep(wait_time)
+                    continue
+            raise e
     
     try:
         import json

@@ -25,6 +25,8 @@ const JobDetailModal = ({ job, resumeText, onClose, onApply }) => {
       formData.append('job_title_inline', job['Job Title'] || '');
       formData.append('job_desc_inline', job['Job Description'] || '');
       formData.append('job_skills_inline', (job.skills || job.Skills || ''));
+      const score = job.hybrid_score !== undefined ? job.hybrid_score : (job.final_score !== undefined ? job.final_score : 0.85);
+      formData.append('ranker_score', score);
       
       const response = await axios.post(`http://localhost:8000/recommend/explain`, formData);
       setExplanation(response.data);
