@@ -1,4 +1,7 @@
 import React, { useState } from 'react';
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker?worker';
+GlobalWorkerOptions.workerSrc = pdfjsWorker;
 import { Upload, FileText, CheckCircle2, Loader2 } from 'lucide-react';
 
 const ResumeUpload = ({ onUpload, loading }) => {
@@ -11,6 +14,31 @@ const ResumeUpload = ({ onUpload, loading }) => {
       onUpload(text);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
+    }
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (file && file.type === 'application/pdf') {
+      const reader = new FileReader();
+      reader.onload = async function() {
+        const typedarray = new Uint8Array(this.result);
+        try {
+          const pdf = await getDocument({ data: typedarray }).promise;
+          let textContent = '';
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const txt = await page.getTextContent();
+            textContent += txt.items.map((s) => s.str).join(' ') + '\n';
+          }
+          setText(textContent);
+        } catch (err) {
+          alert('Failed to parse PDF.');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      alert('Please upload a valid PDF file.');
     }
   };
 
@@ -35,7 +63,10 @@ const ResumeUpload = ({ onUpload, loading }) => {
             <FileText size={20} />
           </div>
         </div>
-
+        <div className="mb-4">
+          <label className="block mb-2 font-medium text-slate-700">Or upload PDF resume:</label>
+          <input type="file" accept="application/pdf" onChange={handleFileChange} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" />
+        </div>
         <button
           type="submit"
           disabled={loading || !text.trim()}

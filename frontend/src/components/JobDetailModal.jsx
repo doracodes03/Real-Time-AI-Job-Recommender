@@ -21,19 +21,12 @@ const JobDetailModal = ({ job, resumeText, onClose, onApply }) => {
       const formData = new FormData();
       formData.append('job_id', job.id);
       formData.append('resume_text', resumeText);
-      // Always send inline job fields so real-time (JSearch) jobs work too
-      formData.append('job_title_inline', job['Job Title'] || '');
-      formData.append('job_desc_inline', job['Job Description'] || '');
-      formData.append('job_skills_inline', (job.skills || job.Skills || ''));
-      const score = job.hybrid_score !== undefined ? job.hybrid_score : (job.final_score !== undefined ? job.final_score : 0.85);
-      formData.append('ranker_score', score);
       
       const response = await axios.post(`http://localhost:8000/recommend/explain`, formData);
       setExplanation(response.data);
     } catch (err) {
       console.error(err);
-      const detail = err?.response?.data?.detail;
-      setError(detail || "Failed to generate AI explanation. Check your API key and connection.");
+      setError("Failed to generate AI explanation. Check your API key and connection.");
     } finally {
       setLoading(false);
     }
@@ -60,7 +53,7 @@ const JobDetailModal = ({ job, resumeText, onClose, onApply }) => {
               <h2 className="text-2xl font-black text-slate-900 leading-tight">{job['Job Title']}</h2>
               <div className="flex items-center gap-2 mt-1 text-slate-500 font-medium">
                 <Building2 size={16} />
-                <span>{job['Company'] || job['Company Name']}</span>
+                <span>{job['Company Name']}</span>
               </div>
             </div>
           </div>
@@ -109,7 +102,7 @@ const JobDetailModal = ({ job, resumeText, onClose, onApply }) => {
           <div>
             <h3 className="text-lg font-bold text-slate-900 mb-4">Required Skills</h3>
             <div className="flex flex-wrap gap-2">
-              {(job.skills || job.Skills)?.split(',').map((skill, i) => (
+              {job.Skills?.split(',').map((skill, i) => (
                 <span key={i} className="px-4 py-2 bg-indigo-50 text-indigo-700 rounded-xl text-xs font-bold border border-indigo-100">
                   {skill.trim()}
                 </span>

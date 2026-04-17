@@ -84,8 +84,8 @@ for index, row in results.iterrows():
     explanation = explain_match(
         resume_data=resume_data,
         job_title=row['Job Title'],
-        job_desc=row.get('Job Description', ''),
-        job_skills=row.get('skills') or row.get('Skills', []),
+        job_desc=df.loc[index, 'Job Description'],
+        job_skills=df.loc[index, 'Skills'],
         ranker_score=row['final_score']
     )
     

@@ -29,7 +29,7 @@ const JobCard = ({ job, onInteraction, onSelect }) => {
             <h3 className="text-lg font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">
               {job['Job Title']}
             </h3>
-            <p className="text-slate-500 font-medium">{job['Company'] || job['Company Name']}</p>
+            <p className="text-slate-500 font-medium">{job['Company Name']}</p>
           </div>
         </div>
         <div className="flex flex-col items-end">
@@ -48,14 +48,14 @@ const JobCard = ({ job, onInteraction, onSelect }) => {
       </div>
 
       <div className="flex flex-wrap gap-2 mb-6">
-        {(job.skills || job.Skills)?.split(',').slice(0, 3).map((skill, i) => (
+        {job.Skills?.split(',').slice(0, 3).map((skill, i) => (
           <span key={i} className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-medium">
             {skill.trim()}
           </span>
         ))}
-        {(job.skills || job.Skills)?.split(',').length > 3 && (
+        {job.Skills?.split(',').length > 3 && (
           <span className="px-3 py-1 bg-slate-50 text-slate-400 rounded-full text-xs font-medium">
-            +{(job.skills || job.Skills).split(',').length - 3} more
+            +{job.Skills.split(',').length - 3} more
           </span>
         )}
       </div>
