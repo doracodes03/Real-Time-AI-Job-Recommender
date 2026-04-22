@@ -512,13 +512,33 @@ def recommend_realtime(
         "x-rapidapi-host": rapidapi_host
     }
 
-    try:
-        response = requests.get(url, headers=headers, params=querystring, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:
-        print(f"  ❌ JSearch API Error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch jobs from JSearch: {str(e)}")
+    timeout_seconds = int(os.getenv("JSEARCH_TIMEOUT_SECONDS", "25"))
+    max_retries = int(os.getenv("JSEARCH_MAX_RETRIES", "2"))
+
+    data = None
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.get(url, headers=headers, params=querystring, timeout=timeout_seconds)
+            response.raise_for_status()
+            data = response.json()
+            break
+        except requests.exceptions.Timeout as e:
+            last_error = e
+            print(f"  ⚠️  JSearch timeout on attempt {attempt + 1}/{max_retries + 1}: {e}")
+            continue
+        except Exception as e:
+            last_error = e
+            print(f"  ❌ JSearch API Error: {e}")
+            break
+
+    if data is None:
+        if isinstance(last_error, requests.exceptions.Timeout):
+            raise HTTPException(
+                status_code=504,
+                detail=f"JSearch timed out after {max_retries + 1} attempts. Try again in a moment."
+            )
+        raise HTTPException(status_code=500, detail=f"Failed to fetch jobs from JSearch: {str(last_error)}")
 
     if "data" not in data or len(data["data"]) == 0:
         return {

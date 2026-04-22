@@ -5,12 +5,16 @@ import ResumeUpload from './components/ResumeUpload';
 import RecommendationTabs from './components/RecommendationTabs';
 import JobCard from './components/JobCard';
 import JobDetailModal from './components/JobDetailModal';
+import AuthModal from './components/AuthModal';
 import { Rocket, Sparkles, AlertCircle, Briefcase } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000';
 
 function App() {
   const [userId] = useState("user_" + Math.random().toString(36).substr(2, 9));
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authToken, setAuthToken] = useState(localStorage.getItem('authToken') || '');
+  const [authUser, setAuthUser] = useState(localStorage.getItem('authUser') || '');
   const [activeTab, setActiveTab] = useState('content');
   const [recommendations, setRecommendations] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -34,15 +38,43 @@ function App() {
         // ⚡ Use fast endpoint for instant results
         response = await axios.post(`${API_BASE}/recommend/fast`, formData);
       } else if (type === 'cf') {
-        response = await axios.get(`${API_BASE}/recommend/collaborative/${userId}`);
+        if (!authToken) {
+          setError('Please login first to use Similar Users recommendations.');
+          setLoading(false);
+          return;
+        }
+        response = await axios.get(`${API_BASE}/recommend/collaborative/${userId}`, {
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
       } else if (type === 'hybrid') {
-        response = await axios.post(`${API_BASE}/recommend/hybrid/${userId}`, formData);
+        if (!authToken) {
+          setError('Please login first to use Hybrid recommendations.');
+          setLoading(false);
+          return;
+        }
+        response = await axios.post(`${API_BASE}/recommend/hybrid/${userId}`, formData, {
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
       } else if (type === 'saved') {
-        response = await axios.get(`${API_BASE}/recommend/saved/${userId}`);
+        if (!authToken) {
+          setError('Please login first to view saved jobs.');
+          setLoading(false);
+          return;
+        }
+        response = await axios.get(`${API_BASE}/recommend/saved/${userId}`, {
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
       } else if (type === 'realtime') {
+        if (!authToken) {
+          setError('Please login first to use Real-Time job search.');
+          setLoading(false);
+          return;
+        }
         formData.append('query', searchQuery);
         formData.append('location', searchLocation);
-        response = await axios.post(`${API_BASE}/recommend/realtime/${userId}`, formData);
+        response = await axios.post(`${API_BASE}/recommend/realtime/${userId}`, formData, {
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
       }
       
       setRecommendations(response.data.recommendations);
@@ -66,11 +98,23 @@ function App() {
 
   const handleInteraction = async (jobId, type) => {
     try {
-      await axios.post(`${API_BASE}/interaction`, {
-        user_id: userId,
-        job_id: jobId,
-        interaction_type: type
-      });
+      if (!authToken) {
+        setError('Please login to save/apply interactions.');
+        setAuthModalOpen(true);
+        return;
+      }
+
+      await axios.post(
+        `${API_BASE}/interaction`,
+        {
+          user_id: userId,
+          job_id: jobId,
+          interaction_type: type
+        },
+        {
+          headers: { Authorization: `Bearer ${authToken}` }
+        }
+      );
       // Optionally refresh CF/Hybrid if on that tab
       if (activeTab !== 'content') {
         fetchRecommendations(activeTab);
@@ -78,6 +122,22 @@ function App() {
     } catch (err) {
       console.error("Interaction failed", err);
     }
+  };
+
+  const handleAuthSuccess = (token, username) => {
+    localStorage.setItem('authToken', token);
+    localStorage.setItem('authUser', username);
+    setAuthToken(token);
+    setAuthUser(username);
+    setError(null);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('authUser');
+    setAuthToken('');
+    setAuthUser('');
+    setError(null);
   };
 
   useEffect(() => {
@@ -88,7 +148,12 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20">
-      <Navbar userId={userId} />
+      <Navbar
+        userId={userId}
+        user={authUser}
+        onLoginClick={() => setAuthModalOpen(true)}
+        onLogout={handleLogout}
+      />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-10">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -236,6 +301,13 @@ function App() {
           }}
         />
       )}
+
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        onAuthSuccess={handleAuthSuccess}
+        API_BASE={API_BASE}
+      />
     </div>
   );
 }
