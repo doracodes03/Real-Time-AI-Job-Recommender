@@ -123,13 +123,15 @@ def recommend_fast(
     page: int = Form(1),
     page_size: int = Form(10)
 ):
+    if tfidf is None or job_vectors is None:
+        raise HTTPException(status_code=503, detail="Models not loaded. Run train.py first.")
+
     # FASTEST path - TF-IDF only
     resume_data = {
         "text": preprocess_text(resume_text),
         "experience": 2,
         "skills": []  # Skip skills for speed
     }
-    filters = {"location": location, "max_experience": max_experience}
     
     results = recommend_jobs(
         resume_data=resume_data,
@@ -139,8 +141,7 @@ def recommend_fast(
         bert_job_vectors=bert_job_vectors,
         top_n=100,  # Get more for pagination
         skip_bert_embedding=True,  # ⚡ AVOID SLOW BERT EMBEDDING COMPUTATION
-        skip_skill_extraction=True,  # ⚡ SKIP EXPENSIVE SKILL EXTRACTION
-        filters=filters
+        skip_skill_extraction=True  # ⚡ SKIP EXPENSIVE SKILL EXTRACTION
     )
     
     # AGGRESSIVE DUPLICATE REMOVAL
@@ -256,7 +257,6 @@ def recommend_content(
         # Continue without LLM - use TF-IDF + BERT only
     
     # Get recommendations (fast path with BERT if available)
-    filters = {"location": location, "max_experience": max_experience}
     print(f"  Recommending jobs for resume ({len(resume_text)} chars)...")
     results = recommend_jobs(
         resume_data=resume_data,
@@ -264,8 +264,7 @@ def recommend_content(
         tfidf=tfidf,
         job_vectors=job_vectors,
         bert_job_vectors=bert_job_vectors,
-        top_n=100,  # Get more for pagination
-        filters=filters
+        top_n=100  # Get more for pagination
     )
     
     # AGGRESSIVE DUPLICATE REMOVAL
@@ -349,15 +348,13 @@ def recommend_hybrid(
     effective_user_id = current_user.username if current_user else user_id
     resume_data = parse_resume_with_llm(resume_text)
     resume_data["text"] = preprocess_text(resume_text)
-    filters = {"location": location, "max_experience": max_experience}
     content_res = recommend_jobs(
         resume_data=resume_data,
         df=df.copy(),
         tfidf=tfidf,
         job_vectors=job_vectors,
         bert_job_vectors=bert_job_vectors,
-        top_n=100,
-        filters=filters
+        top_n=100
     )
     
     # 2. CF
@@ -487,6 +484,14 @@ def recommend_realtime(
 
     import requests
 
+    rapidapi_key = os.getenv("JSEARCH_RAPIDAPI_KEY")
+    rapidapi_host = os.getenv("JSEARCH_RAPIDAPI_HOST", "jsearch.p.rapidapi.com")
+    if not rapidapi_key:
+        raise HTTPException(
+            status_code=500,
+            detail="JSearch API key missing. Set JSEARCH_RAPIDAPI_KEY in .env"
+        )
+
     # =========================
     # 🔹 1. Fetch real-time jobs from JSearch
     # =========================
@@ -503,8 +508,8 @@ def recommend_realtime(
     }
 
     headers = {
-        "x-rapidapi-key": "316673a70cmsh391f26dddb379d6p173854jsn885ec92eefb8",
-        "x-rapidapi-host": "jsearch.p.rapidapi.com"
+        "x-rapidapi-key": rapidapi_key,
+        "x-rapidapi-host": rapidapi_host
     }
 
     try:

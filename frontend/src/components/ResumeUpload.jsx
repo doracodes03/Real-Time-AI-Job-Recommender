@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf';
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker?worker';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 GlobalWorkerOptions.workerSrc = pdfjsWorker;
 import { Upload, FileText, CheckCircle2, Loader2 } from 'lucide-react';
 

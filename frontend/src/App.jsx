@@ -48,8 +48,9 @@ function App() {
       setRecommendations(response.data.recommendations);
     } catch (err) {
       console.error(err);
-      if (err.response?.status === 400) {
-        setError("Error: " + err.response.data.detail);
+      const detail = err.response?.data?.detail;
+      if (detail) {
+        setError("Error: " + detail);
       } else {
         setError("Failed to fetch recommendations. Is the backend running?");
       }
